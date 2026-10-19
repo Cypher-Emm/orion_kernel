@@ -1,0 +1,64 @@
+name: Source audit
+
+on:
+  workflow_dispatch:
+  push:
+    branches: [main]
+
+permissions:
+  contents: read
+
+jobs:
+  audit:
+    runs-on: ubuntu-22.04
+    steps:
+      - name: Checkout Orion repository
+        uses: actions/checkout@v4
+
+      - name: Fetch Xiaomi munch-s-oss source for comparison
+        run: |
+          git clone --depth=1 --branch munch-s-oss https://github.com/MiCode/Xiaomi_Kernel_OpenSource.git /tmp/xiaomi-kernel
+
+      - name: Inspect source completeness
+        shell: bash
+        run: |
+          set -uo pipefail
+          {
+            echo "# Orion kernel source audit"
+            echo
+            echo "- Xiaomi source branch: `munch-s-oss`"
+            echo "- Xiaomi commit: `$(git -C /tmp/xiaomi-kernel rev-parse HEAD)`"
+            echo "- Orion commit: \"${GITHUB_SHA}\""
+            echo
+            echo "## Repository contents"
+            echo "Tracked files in Orion: $(git ls-files | wc -l)"
+            echo
+            echo "## Device config candidates"
+            find /tmp/xiaomi-kernel/arch/arm64/configs -type f \( -iname '*munch*' -o -iname '*kona*' -o -iname '*sm8250*' \) -print 2>/dev/null | sort || true
+            echo
+            echo "## Techpack directories"
+            for d in display camera audio; do
+              if [ -d "/tmp/xiaomi-kernel/techpack/$d" ]; then
+                echo "- techpack/$d: present"
+                find "/tmp/xiaomi-kernel/techpack/$d" -mindepth 1 -maxdepth 1 -type d -printf '  - %f\n' | sort
+              else
+                echo "- techpack/$d: MISSING"
+              fi
+            done
+            echo
+            echo "## Build readiness"
+            if find /tmp/xiaomi-kernel/arch/arm64/configs -type f -iname '*munch*' -print -quit | grep -q .; then
+              echo "A munch-named arm64 config exists in Xiaomi source."
+            else
+              echo "No munch-named arm64 defconfig found in Xiaomi source; a device config must be recovered from a known-good device kernel tree before a genuine build can be attempted."
+            fi
+            echo
+            echo "This workflow is an audit only; it does not produce a flashable kernel."
+          } | tee source-audit.md
+
+      - name: Upload audit report
+        uses: actions/upload-artifact@v4
+        with:
+          name: orion-source-audit
+          path: source-audit.md
+          if-no-files-found: error
