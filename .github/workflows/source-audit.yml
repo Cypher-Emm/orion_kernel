@@ -26,7 +26,7 @@ jobs:
           {
             echo "# Orion kernel source audit"
             echo
-            echo "- Xiaomi source branch: `munch-s-oss`"
+            echo "- Xiaomi source branch: munch-s-oss"
             echo "- Xiaomi commit: `$(git -C /tmp/xiaomi-kernel rev-parse HEAD)`"
             echo "- Orion commit: \"${GITHUB_SHA}\""
             echo
