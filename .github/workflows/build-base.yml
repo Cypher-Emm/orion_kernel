@@ -1,0 +1,84 @@
+name: Build Danda420 base (no root)
+
+on:
+  workflow_dispatch:
+  push:
+    paths:
+      - ".github/workflows/build-base.yml"
+    branches: [main]
+
+permissions:
+  contents: read
+
+jobs:
+  build:
+    runs-on: ubuntu-22.04
+    timeout-minutes: 360
+    steps:
+      - name: Install build dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y             bc bison build-essential ccache clang-14 flex             gcc-aarch64-linux-gnu gcc-arm-linux-gnueabi             libelf-dev libssl-dev lld-14 llvm-14             python3 rsync
+
+      - name: Checkout Danda420 base source
+        run: |
+          git clone --filter=blob:none --no-checkout https://github.com/Danda420/kernel_xiaomi_sm8250.git kernel
+          git -C kernel fetch --depth=1 origin refs/heads/base
+          git -C kernel checkout --detach FETCH_HEAD
+          echo "SOURCE_COMMIT=$(git -C kernel rev-parse HEAD)" >> "$GITHUB_ENV"
+          echo "SOURCE_BRANCH=base" >> "$GITHUB_ENV"
+
+      - name: Verify target config and no root integration
+        working-directory: kernel
+        run: |
+          set -euo pipefail
+          test -f arch/arm64/configs/vendor/munch_defconfig
+          test -d techpack/display
+          test -d techpack/camera
+          test -d techpack/audio
+          echo "Source commit: $SOURCE_COMMIT"
+          echo "Config: vendor/munch_defconfig"
+          echo "Checking for common in-tree root implementations:"
+          if git grep -n -E 'KernelSU|kernelsu|KSU_VERSION|APatch|SUSFS|BakaSU' -- ':!Documentation' ':!README*'; then
+            echo "::warning::Root-related strings were found. Review the matches; this workflow does not add root patches."
+          else
+            echo "No common root implementation markers found."
+          fi
+
+      - name: Configure kernel
+        working-directory: kernel
+        run: |
+          set -euo pipefail
+          make O=out ARCH=arm64 LLVM=1 LLVM_IAS=1 vendor/munch_defconfig
+          grep -E 'CONFIG_(KSU|KERNELSU|SUSFS|APATCH|ROOT)' out/.config || true
+
+      - name: Build kernel and device trees
+        working-directory: kernel
+        run: |
+          set -o pipefail
+          make -j"$(nproc)" O=out ARCH=arm64 LLVM=1 LLVM_IAS=1 Image.gz-dtb dtbs 2>&1 | tee build.log
+
+      - name: Collect build outputs
+        if: always()
+        run: |
+          mkdir -p artifact
+          cp kernel/build.log artifact/ 2>/dev/null || true
+          cp kernel/out/arch/arm64/boot/Image.gz-dtb artifact/ 2>/dev/null || true
+          cp kernel/out/arch/arm64/boot/Image artifact/ 2>/dev/null || true
+          find kernel/out/arch/arm64/boot/dts -type f -name '*.dtb' -exec cp --parents {} artifact/ \; 2>/dev/null || true
+          {
+            echo "Source repository: https://github.com/Danda420/kernel_xiaomi_sm8250"
+            echo "Source branch: base"
+            echo "Source commit: ${SOURCE_COMMIT:-unavailable}"
+            echo "Config: vendor/munch_defconfig"
+            echo "Root implementation: none added by this workflow"
+          } > artifact/build-info.txt
+
+      - name: Upload test-build artifacts
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: orion-munch-base-test-build
+          path: artifact/
+          if-no-files-found: warn
+          retention-days: 7
